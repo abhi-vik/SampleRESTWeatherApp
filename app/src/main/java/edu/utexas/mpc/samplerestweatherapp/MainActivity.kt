@@ -4,50 +4,109 @@ import android.os.Bundle
 import android.support.v7.app.AppCompatActivity
 import android.widget.Button
 import android.widget.TextView
+import android.widget.ImageView
 import com.android.volley.RequestQueue
 import com.android.volley.toolbox.StringRequest
 import com.android.volley.toolbox.Volley
 import com.google.gson.Gson
+import com.squareup.picasso.Picasso
+import org.eclipse.paho.android.service.MqttAndroidClient
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
+import org.eclipse.paho.client.mqttv3.MqttMessage
+
 
 class MainActivity : AppCompatActivity() {
-
-
-    // I'm using lateinit for these widgets because I read that repeated calls to findViewById
-    // are energy intensive
-    lateinit var textView: TextView
+    lateinit var syncButton: Button
     lateinit var retrieveButton: Button
+    lateinit var textView: TextView
+    lateinit var imageView: ImageView
+    lateinit var publishButton: Button
+    lateinit var syncText: TextView
+
+    lateinit var mqttAndroidClient: MqttAndroidClient
 
     lateinit var queue: RequestQueue
     lateinit var gson: Gson
     lateinit var mostRecentWeatherResult: WeatherResult
 
+    val serverUri = "tcp://192.168.4.1:1883"
+    val clientId = "EmergingTechMQTTClient"
+    val publishTopic = "weather"
+    val subscribeTopic = "steps"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        textView = this.findViewById(R.id.text)
+        syncButton = this.findViewById(R.id.syncButton)
         retrieveButton = this.findViewById(R.id.retrieveButton)
-
-        // when the user presses the syncbutton, this method will get called
-        retrieveButton.setOnClickListener({ requestWeather() })
+        textView = this.findViewById(R.id.text)
+        imageView = this.findViewById(R.id.imageView)
+        publishButton = this.findViewById(R.id.publishButton)
+        syncText = this.findViewById(R.id.syncText)
 
         queue = Volley.newRequestQueue(this)
         gson = Gson()
+
+        syncButton.setOnClickListener({ syncWithPi() })
+        retrieveButton.setOnClickListener({ requestWeather() })
+        publishButton.setOnClickListener({ sendWeather() })
+        mqttAndroidClient = MqttAndroidClient(getApplicationContext(), serverUri, clientId)
+        mqttAndroidClient.setCallback(object: MqttCallbackExtended {
+
+            override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                println("Connection Complete!!")
+                mqttAndroidClient.subscribe(subscribeTopic, 0)
+            }
+
+            override fun messageArrived(topic: String?, message: MqttMessage?) {
+                println("test")
+                println(message)
+                syncText.text = message.toString()
+            }
+
+            override fun connectionLost(cause: Throwable?) {
+                println("Connection Lost")
+            }
+
+            override fun deliveryComplete(token: IMqttDeliveryToken?) {
+                println("Delivery Complete")
+            }
+        })
     }
 
-    fun requestWeather(){
-        val url = StringBuilder("https://api.openweathermap.org/data/2.5/weather?id=4254010&appid=<your API key here!>").toString()
+    fun sendWeather () {
+        val weather = mostRecentWeatherResult.weather.get(0).main
+        println(weather)
+        val message = MqttMessage()
+        message.payload = weather.toByteArray()
+        println(message)
+        println(mqttAndroidClient)
+        mqttAndroidClient.publish(publishTopic, message)
+    }
+
+    fun requestWeather() {
+        val url = StringBuilder("https://api.openweathermap.org/data/2.5/weather?id=4254010&appid=03519fb228fd7abd9e4f94d06d81eb27").toString()
         val stringRequest = object : StringRequest(com.android.volley.Request.Method.GET, url,
                 com.android.volley.Response.Listener<String> { response ->
                     //textView.text = response
                     mostRecentWeatherResult = gson.fromJson(response, WeatherResult::class.java)
-                    textView.text = mostRecentWeatherResult.weather.get(0).main
+                    val weather = mostRecentWeatherResult.weather.get(0)
+                    val icon = weather.icon
+                    textView.text = weather.main
+                    println(imageView)
+                    Picasso.get().load("https://openweathermap.org/img/wn/$icon@2x.png").into(imageView)
                 },
                 com.android.volley.Response.ErrorListener { println("******That didn't work!") }) {}
-        // Add the request to the RequestQueue.
         queue.add(stringRequest)
     }
+
+    fun syncWithPi(){
+        println("+++++++ Connecting...")
+        mqttAndroidClient.connect()
+    }
+
 }
 
 class WeatherResult(val id: Int, val name: String, val cod: Int, val coord: Coordinates, val main: WeatherMain, val weather: Array<Weather>)
